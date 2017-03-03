@@ -1,7 +1,0 @@
-- filtrar en match_adm los 'movement' de usuarios incorrectos (o antes de empezar una partida)
-
-- ver que onda OBS
-
-- dar de baja la partida cuando juego el comando PLA END 
-
-- dar de baja jugadores y partidas a su nombre cuando hago BYE
