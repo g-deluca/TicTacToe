@@ -125,7 +125,7 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                 2 -> NewUserName = lists:nth(2,Input),
                                      PidUser = spawn(?MODULE, user, [Listener, Node]),
                                      case global:register_name(NewUserName, PidUser) of
-                                       yes -> {Socket,Node}!{log, NewUserName};
+                                       yes ->{Socket,Node}!{log, NewUserName};
                                        no -> PidUser!kill,
                                              {Socket, Node}!log_fail
                                      end;
@@ -263,34 +263,33 @@ match(Player1,Player2,Spects,MatchName) ->
                                  match_initialized(Player1,UserName,true,"---------",Spects,MatchName);
               {ending,UserName} -> global:send(UserName,you_end_game);
               kill -> ok
-  			    end
+            end
   end.
 
 match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
   case Turn of
     % If it is player 1
     true -> receive
-  			      {movement,X,Y,User} -> if User == Player1 -> 
+              {movement,X,Y,User} -> if User == Player1 -> 
                                           case lists:nth((3*(X-1)+Y),Board) of
-  								                          45 -> NewBoard = replace((3*(X-1)+Y),Board,"X"),
-  																                global:send(Player1,{update,NewBoard,MatchName}),
-  																	              global:send(Player2,{update,NewBoard,MatchName}),
-  																	              lists:map(fun(S) -> global:send(S,{update,NewBoard,MatchName}) end,Spects),
+                                            45 -> NewBoard = replace((3*(X-1)+Y),Board,"X"),
+                                                  global:send(Player1,{update,NewBoard,MatchName}),
+                                                  global:send(Player2,{update,NewBoard,MatchName}),
+                                                  lists:map(fun(S) -> global:send(S,{update,NewBoard,MatchName}) end,Spects),
                                                   case someoneWon(NewBoard) of
-  																                  true -> global:send(Player1,{victory, Player1, MatchName}),
-  																	                        global:send(Player2,{victory, Player1, MatchName}),
+                                                    true -> global:send(Player1,{victory, Player1, MatchName}),
+                                                            global:send(Player2,{victory, Player1, MatchName}),
                                                             lists:map(fun(S) -> global:send(S,{victory, Player1, MatchName}) end,Spects);
-
-                                                    false -> global:send(Player2,turn),
-  																                           match_initialized(Player1,Player2,false,NewBoard,Spects,MatchName)
+                                                    false ->global:send(Player2,turn),
+                                                            match_initialized(Player1,Player2,false,NewBoard,Spects,MatchName)
                                                   end;
-  																          _  -> global:send(Player1,no_valid),
+                                            _  -> global:send(Player1,no_valid),
                                                   match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
-  										                   end;
-  											                true -> global:send(User,no_valid),
+                                          end;
+                                        true -> global:send(User,no_valid),
                                                 match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
                                      end;
-  			    	{spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,Spects++[SpectUser],MatchName);
+              {spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,Spects++[SpectUser],MatchName);
               {end_spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,lists:filter(fun(X) -> SpectUser /= X end,Spects),MatchName);
               {ending,User} -> global:send(User,you_end_game),
                                if
@@ -299,36 +298,35 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                end,
                                lists:map(fun(S) -> global:send(S,{end_spect,User,MatchName}) end,Spects)
             end;
-  		false -> receive
-  				       {movement,X,Y,User} -> if
-  				                                User == Player2 ->
-                                            case lists:nth((3*(X-1)+Y),Board) of
-  								                            45 -> NewBoard = replace((3*(X-1)+Y),Board,"O"),
-  																                  global:send(Player1,{update,NewBoard,MatchName}),
-  																	                global:send(Player2,{update,NewBoard,MatchName}),
-  																	                lists:map(fun(S) -> global:send(S,{update,NewBoard,MatchName}) end,Spects),
-                                                    case someoneWon(NewBoard) of
-  																                    true -> global:send(Player1,{victory, Player2, MatchName}),
-  																	                          global:send(Player2,{victory, Player2, MatchName}),
-  																	                          lists:map(fun(S) -> global:send(S,{victory, Player2, MatchName}) end,Spects);
-                                                      false -> global:send(Player1,turn),
-  																                             match_initialized(Player1,Player2,true,NewBoard,Spects,MatchName)
-                                                    end;
-  														           		  _  -> global:send(Player2,no_valid),
-                                                    match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
-  										                      end;
-  											                  true -> global:send(User,no_valid),
-                                                  match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
-                                        end;
-                  {ending,User} -> global:send(User,you_end_game),
-                                   if
-                                     User == Player1 -> global:send(Player2,{opponent_end_game,User});
-                                     true -> global:send(Player1,{opponent_end_game,User})
-                                   end,
-                                   lists:map(fun(S) -> global:send(S,{end_spect,User,MatchName}) end,Spects);
-                  {end_spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,lists:filter(fun(X) -> SpectUser /= X end,Spects),MatchName);
-  				        {spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,Spects++[SpectUser],MatchName)
-                end
+    false -> receive
+               {movement,X,Y,User} -> if User == Player2 ->
+                                           case lists:nth((3*(X-1)+Y),Board) of
+                                             45 -> NewBoard = replace((3*(X-1)+Y),Board,"O"),
+                                                   global:send(Player1,{update,NewBoard,MatchName}),
+                                                   global:send(Player2,{update,NewBoard,MatchName}),
+                                                   lists:map(fun(S) -> global:send(S,{update,NewBoard,MatchName}) end,Spects),
+                                                   case someoneWon(NewBoard) of 
+                                                     true -> global:send(Player1,{victory, Player2, MatchName}),
+                                                             global:send(Player2,{victory, Player2, MatchName}),    
+                                                             lists:map(fun(S) -> global:send(S,{victory, Player2, MatchName}) end,Spects);
+                                                     false -> global:send(Player1,turn),
+                                                              match_initialized(Player1,Player2,true,NewBoard,Spects,MatchName)
+                                                   end;
+                                             _  -> global:send(Player2,no_valid),
+                                                   match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
+                                           end;
+                                         true -> global:send(User,no_valid),
+                                                 match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
+                                      end;
+               {ending,User} -> global:send(User,you_end_game),
+                                if
+                                  User == Player1 -> global:send(Player2,{opponent_end_game,User});
+                                  true -> global:send(Player1,{opponent_end_game,User})
+                                end,
+                                lists:map(fun(S) -> global:send(S,{end_spect,User,MatchName}) end,Spects);
+               {end_spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,lists:filter(fun(X) -> SpectUser /= X end,Spects),MatchName);
+               {spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,Spects++[SpectUser],MatchName)
+             end
   end.
 
 
@@ -337,20 +335,20 @@ replace(N,List,Token) ->
   case N of
   	1 -> Token++lists:nthtail(1,List);
   	_ -> change(lists:nth(1,List))++replace(N-1,lists:nthtail(1,List),Token)
- 	end.
+  end.
 
 change(X) ->
- 	case X of
- 		45  -> "-";
- 		88  -> "X";
- 		79  -> "O"
- 	end.
+ case X of
+   45  -> "-";
+   88  -> "X";
+   79  -> "O"
+ end.
 
 update(Game,GameName,UserName) ->
   case Game of
     {GN,P1,P2} -> if GN == GameName -> {GN,P1,UserName};
                      true -> {GN,P1,P2}
-  		            end
+                  end
   end.
 
 
@@ -359,10 +357,10 @@ atom_to_integer(Num) ->
 
 
 match_print(G) ->
- 	case G of
- 		{GameName,P1,none} -> io_lib:format("La partida de ~p busca contricante, el nombre es ~p~n",[P1,GameName]);
- 		{GameName,P1,P2} -> io_lib:format("La partida de ~p esta en curso. ~p VS ~p, el nombre es ~p~n",[P1,P1,P2,GameName])
- 	end.
+ case G of
+   {GameName,P1,none} -> io_lib:format("La partida de ~p busca contricante, el nombre es ~p~n",[P1,GameName]);
+   {GameName,P1,P2} -> io_lib:format("La partida de ~p esta en curso. ~p VS ~p, el nombre es ~p~n",[P1,P1,P2,GameName])
+ end.
 
 someoneWon(Board) ->
   rowWin(Board) or columnWin(Board) or diagWin(Board).
