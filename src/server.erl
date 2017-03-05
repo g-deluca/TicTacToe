@@ -2,11 +2,11 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%                                                                                               %%%
 %%% CORREGIR (????)                                                                               %%%
-%%% 1) Puedo poner muchas veces el comando OBS y tendre muchas actualizaciones (lo que esta bueno %%%
-%%% es que un solo comando LEA borra todo.                                                        %%% 
-%%% 2) PLA asd 2 w: se rompe en list_to_integer por la entrada w.                                 %%%
+%%% 1) Corregi OBS, ahora manda el mismo mensaje cada vez que lo pones (viaje corregir eso)       %%%
+%%% pero lo agrega una sola vez a la lisrta de spects                                             %%%
+%%% 2) DONE                                                                                       %%%
 %%% 3) Revisar BYE que me dio paja.                                                               %%%
-%%%                                                                                               %%%
+%%% 4) Agregar HELP (DONE) y SAY (DONE)                                                           %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -22,7 +22,7 @@ start(Name, Port) ->
 
 server(Name, Port) ->
   {ok, LSock} = gen_tcp:listen(Port,[{packet,0},{active,false}]),
-  
+
   % Each server has a pbalance and a match_adm process
   PidBalance = spawn(?MODULE, pbalance, [statistics(total_active_tasks),node()]),
   register(pid_balance, PidBalance),
@@ -41,11 +41,11 @@ dispatcher(LSock, Cont, Node) ->
 % Start processes that will handle the connection with client
   % Sends messages that aren't the response of a command:
   % update messages for example
-  NameListener = list_to_atom("listener"++integer_to_list(Cont)),  
+  NameListener = list_to_atom("listener"++integer_to_list(Cont)),
   PidListener = spawn(?MODULE, listener, [CSock]),
   io:format("listener started in ~p ~n",[Node]),
   register(NameListener, PidListener),
-  
+
   % Responds to the inputs of the user
   NameSocket = list_to_atom("socket"++integer_to_list(Cont)),
   PidSocket = spawn(?MODULE, psocket, [CSock, none, true, NameSocket, NameListener]),
@@ -96,6 +96,7 @@ psocket(CSock, UserName, Flag, Socket, Listener) ->
         {log, User} -> gen_tcp:send(CSock, "LOG " ++ atom_to_list(User)),
                        psocket(CSock, User, false, Socket, Listener);
         {games, ListGames} -> gen_tcp:send(CSock,"GAMES "++ListGames);
+        {help, Text} -> gen_tcp:send(CSock,"HELP "++Text);
         log_fail -> gen_tcp:send(CSock, "LOG_FAIL ");
         already_log -> gen_tcp:send(CSock,"ALREADY_LOG "++atom_to_list(UserName));
         not_log -> gen_tcp:send(CSock,"NOT_LOG ");
@@ -128,12 +129,12 @@ listener(CSock) ->
     {say,UserName,Msg} -> gen_tcp:send(CSock,"SAY "++atom_to_list(UserName)++" "++Msg);
     {end_spect,UserName,Game} -> gen_tcp:send(CSock,"END_SPECT "++atom_to_list(UserName)++" "++atom_to_list(Game));
     {turn, MatchName} -> gen_tcp:send(CSock,"TURN "++atom_to_list(MatchName));
+    {draw, MatchName} -> gen_tcp:send(CSock,"DRAW "++atom_to_list(MatchName));
     bad_index -> gen_tcp:send(CSock, "BAD_INDEX");
     not_start -> gen_tcp:send(CSock,"NOT_START ");
     no_valid_turn -> gen_tcp:send(CSock,"NO_VALID_TURN ");
     you_end_game -> gen_tcp:send(CSock,"YOU_END_GAME ")
   end,
-
   receive after 1000 -> ok end,
   listener(CSock).
 
@@ -158,6 +159,7 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
     _ -> Command = lists:nth(1, Input),
          case Flag of
            true -> case Command of
+                     'HELP'-> {Socket, Node}!{help, show_help()};
                      'CON' -> case Args of
                                 2 -> NewUserName = lists:nth(2,Input),
                                      PidUser = spawn(?MODULE, user, [Listener, Node]),
@@ -177,6 +179,7 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                       receive
                                         {list, Games} -> {Socket, Node}!{games, lists:flatten(lists:map(fun(X) -> match_print(X) end, Games))}
                                       end;
+                             'HELP'-> {Socket, Node}!{help, show_help()};
                              'BYE' -> global:send(UserName, kill),
                                       {Socket, Node}!log_out;
                               _    -> {Socket, Node}!incorrect
@@ -212,7 +215,16 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                        no_valid_game -> {Socket, Node}!no_valid_game;
                                        not_allowed -> {Socket, Node}!not_allowed
                                      end;
-                              _   -> {Socket, Node}!incorrect
+                              _   -> case Command of
+                                       'SAY' -> User = Arg1,
+                                                Users = global:registered_names(),
+                                                case length(lists:filter(fun(X) -> X == User end,Users)) of
+                                                  0 -> {Socket,Node}!no_valid_user;
+                                                  _ -> global:send(User,{say,UserName,lists:subtract(Binary,"SAY "++atom_to_list(User))}),
+                                                       {Socket,Node}!well_delivered
+                                                end;
+                                       _ -> {Socket, Node}!incorrect
+                                    end
                            end;
                       4 -> Arg1 = lists:nth(2, Input),
                            Arg2 = lists:nth(3, Input),
@@ -225,13 +237,32 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                        not_allowed -> {Socket, Node}!not_allowed;
                                        bad_index -> {Socket, Node}!bad_index
                                      end;
+                             'SAY' -> User = Arg1,
+                                      Users = global:registered_names(),
+                                      case length(lists:filter(fun(X) -> X == User end,Users)) of
+                                        0 -> {Socket,Node}!no_valid_user;
+                                        _ -> global:send(User,{say,UserName,lists:subtract(Binary,"SAY "++atom_to_list(User))}),
+                                             {Socket,Node}!well_delivered
+                                      end;
                               _   -> {Socket, Node}!incorrect
                            end;
-                      _ -> {Socket, Node}!incorrect
+                      _ -> case Command of
+                             'SAY' -> User = lists:nth(2,Input),
+                                      Users = global:registered_names(),
+                                      case length(lists:filter(fun(X) -> X == User end,Users)) of
+                                        0 -> {Socket,Node}!no_valid_user;
+                                        _ -> global:send(User,{say,UserName,lists:subtract(Binary,"SAY "++atom_to_list(User))}),
+                                             {Socket,Node}!well_delivered
+                                      end;
+                                _ -> {Socket, Node}!incorrect
+                          end
                     end
          end
   end.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Game administration processes:
 
 % Administrates the games, create new rooms, deliver plays, etc...
 match_adm(Games) ->
@@ -303,10 +334,15 @@ match_adm(Games) ->
   end,
   match_adm(Games).
 
+% A match has two instances: match represents the game in a 'lobby' state, waiting for
+% someone to join. When a player 2 is joined, match_initialized is called  and keeps administrating the plays
 match(Player1,Player2,Spects,MatchName) ->
   case Player2 of
     none -> receive
-  	          {spect,SpectUser}  -> match(Player1,Player2,Spects++[SpectUser],MatchName);
+  	          {spect,SpectUser}  -> case lists:filter(fun(X) -> SpectUser == X end, Spects) of
+                                      [] -> match(Player1,Player2,Spects++[SpectUser],MatchName);
+                                       _ -> match(Player1,Player2,Spects,MatchName)
+                                    end;
               {movement,_,_,UserName} -> global:send(UserName,not_start),
                                          match(Player1, Player2, Spects, MatchName);
   	          {join,UserName} -> global:send(Player1,{turn, MatchName}),
@@ -318,9 +354,9 @@ match(Player1,Player2,Spects,MatchName) ->
 
 match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
   case Turn of
-    % If it is player 1
+    % If it is player 1 turn
     true -> receive
-              {movement,X,Y,User} -> if User == Player1 -> 
+              {movement,X,Y,User} -> if User == Player1 ->
                                           case lists:nth((3*(X-1)+Y),Board) of
                                             45 -> NewBoard = replace((3*(X-1)+Y),Board,"X"),
                                                   global:send(Player1,{update,NewBoard,MatchName}),
@@ -332,8 +368,15 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                                             lists:map(fun(S) -> global:send(S,{victory, Player1, MatchName}) end,Spects),
                                                             lists:map(fun(N) -> {pid_matchadm,N}!{end_refresh,MatchName} end, nodes()),
                                                             pid_matchadm!{end_refresh, MatchName};
-                                                    false ->global:send(Player2,{turn,MatchName}),
-                                                            match_initialized(Player1,Player2,false,NewBoard,Spects,MatchName)
+                                                    false -> case is_it_draw(NewBoard) of 
+                                                               false -> global:send(Player2,{turn,MatchName}),
+                                                                        match_initialized(Player1,Player2,false,NewBoard,Spects,MatchName);
+                                                               true  -> global:send(Player1,{draw, MatchName}),
+                                                                        global:send(Player2,{draw, MatchName}),
+                                                                        lists:map(fun(S) -> global:send(S,{draw, MatchName}) end,Spects),
+                                                                        lists:map(fun(N) -> {pid_matchadm,N}!{end_refresh,MatchName} end,nodes()),
+                                                                        pid_matchadm!{end_refresh, MatchName}
+                                                             end
                                                   end;
                                             _  -> global:send(Player1,bad_index),
                                                   match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
@@ -341,7 +384,10 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                         true -> global:send(User,no_valid_turn),
                                                 match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
                                      end;
-              {spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,Spects++[SpectUser],MatchName);
+  	          {spect,SpectUser}  -> case lists:filter(fun(X) -> SpectUser == X end, Spects) of
+                                      [] -> match_initialized(Player1,Player2, Turn, Board, Spects++[SpectUser],MatchName);
+                                       _ -> match_initialized(Player1,Player2, Turn, Board, Spects,MatchName)
+                                    end;
               {end_spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,lists:filter(fun(X) -> SpectUser /= X end,Spects),MatchName);
               {ending,User} -> global:send(User,you_end_game),
                                if
@@ -350,6 +396,7 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                end,
                                lists:map(fun(S) -> global:send(S,{end_spect,User,MatchName}) end,Spects)
             end;
+    % If it is player 2 turn
     false -> receive
                {movement,X,Y,User} -> if User == Player2 ->
                                            case lists:nth((3*(X-1)+Y),Board) of
@@ -357,14 +404,21 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                                    global:send(Player1,{update,NewBoard,MatchName}),
                                                    global:send(Player2,{update,NewBoard,MatchName}),
                                                    lists:map(fun(S) -> global:send(S,{update,NewBoard,MatchName}) end,Spects),
-                                                   case someoneWon(NewBoard) of 
+                                                   case someoneWon(NewBoard) of
                                                      true -> global:send(Player1,{victory, Player2, MatchName}),
-                                                             global:send(Player2,{victory, Player2, MatchName}),    
+                                                             global:send(Player2,{victory, Player2, MatchName}),
                                                              lists:map(fun(S) -> global:send(S,{victory, Player2, MatchName}) end,Spects),
                                                              lists:map(fun(N) -> {pid_matchadm,N}!{end_refresh,MatchName} end, nodes()),
                                                              pid_matchadm!{end_refresh, MatchName};
-                                                     false -> global:send(Player1,{turn,MatchName}),
-                                                              match_initialized(Player1,Player2,true,NewBoard,Spects,MatchName)
+                                                     false -> case is_it_draw(NewBoard) of 
+                                                                false -> global:send(Player1,{turn,MatchName}),
+                                                                         match_initialized(Player1,Player2,true,NewBoard,Spects,MatchName);
+                                                                true  -> global:send(Player1,{draw, MatchName}),
+                                                                         global:send(Player2,{draw, MatchName}),
+                                                                         lists:map(fun(S) -> global:send(S,{draw, MatchName}) end,Spects),
+                                                                         lists:map(fun(N) -> {pid_matchadm,N}!{end_refresh,MatchName} end,nodes()),
+                                                                         pid_matchadm!{end_refresh, MatchName}
+                                                              end
                                                    end;
                                              _  -> global:send(Player2,bad_index),
                                                    match_initialized(Player1,Player2,Turn,Board,Spects,MatchName)
@@ -379,18 +433,26 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                 end,
                                 lists:map(fun(S) -> global:send(S,{end_spect,User,MatchName}) end,Spects);
                {end_spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,lists:filter(fun(X) -> SpectUser /= X end,Spects),MatchName);
-               {spect,SpectUser} -> match_initialized(Player1,Player2,Turn,Board,Spects++[SpectUser],MatchName)
+  	           {spect,SpectUser}  -> case lists:filter(fun(X) -> SpectUser == X end, Spects) of
+                                       [] -> match_initialized(Player1,Player2, Turn, Board, Spects++[SpectUser],MatchName);
+                                        _ -> match_initialized(Player1,Player2, Turn, Board, Spects,MatchName)
+                                     end
              end
   end.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
-%Auxiliar functions
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Auxiliar functions
 replace(N,List,Token) ->
   case N of
   	1 -> Token++lists:nthtail(1,List);
   	_ -> change(lists:nth(1,List))++replace(N-1,lists:nthtail(1,List),Token)
   end.
 
+% Blame Erlang for this
 change(X) ->
  case X of
    45  -> "-";
@@ -398,6 +460,7 @@ change(X) ->
    79  -> "O"
  end.
 
+% Update a game from the gamelist in match_adm
 update(Game,GameName,UserName) ->
   case Game of
     {GN,P1,P2} -> if GN == GameName -> {GN,P1,UserName};
@@ -409,15 +472,44 @@ is_movement_allowed(X,Y) ->
   (X>0) and (X<4) and (Y>0) and (Y<4).
 
 atom_to_integer(Num) ->
-  list_to_integer(atom_to_list(Num)).
+  case catch list_to_integer(atom_to_list(Num)) of
+    % If list_to_integer returns an error, we return a number out of range
+    % that will be detected by match_adm
+    {'EXIT', _} -> 5;
 
+    % Otherwise, we return the number
+    X -> X
+  end.
 
+%% Printing help
+show_help() ->
+        io_lib:format("~nCON <usuario>       -- conectarse al servidor con nombre <username>~n",[])++
+        io_lib:format("LSG                   -- ver la lista de partidas~n",[])++
+        io_lib:format("BYE                   -- desconectarse del servidor~n",[])++
+        io_lib:format("NEW <sala>            -- crear una sala con nombre <sala>~n",[])++
+        io_lib:format("SAY <usuario> <msj>   -- enviar un mensaje <msj> a <usuario>~n",[])++
+        io_lib:format("ACC <sala>            -- acceder a la sala <sala> para jugar~n",[])++
+        io_lib:format("PLA <sala> <x> <y>    -- realizar una jugada en la sala match en la posicion (x,y)~n",[])++
+        io_lib:format("PLA <sala> END        -- abandonar la sala <sala> como jugador~n",[])++
+        io_lib:format("OBS <sala>            -- unirse como espectador a la sala <sala>~n",[])++
+        io_lib:format("LEA <sala>            -- dejar de observar la sala <sala>~n",[])++
+        io_lib:format("HELP                  -- mostrar este menu~n~n",[]).
+
+%% Used for printing the match when receiving LSG command
 match_print(G) ->
  case G of
    {GameName,P1,none} -> io_lib:format("Partida: ~p, creador de la sala: ~p, estado: esperando contrincante~n",[GameName,P1]);
-   {GameName,P1,P2} -> io_lib:format("Partida ~p, creador de la sala~p, estado: en curso - ~p vs ~p~n",[GameName,P1,P1,P2])
+   {GameName,P1,P2} -> io_lib:format("Partida ~p, creador de la sala: ~p, estado: en curso - ~p vs ~p~n",[GameName,P1,P1,P2])
  end.
 
+%% Checks if it is a draw
+is_it_draw(Board) -> 
+  case lists:filter(fun(X) -> X==45 end, Board) of
+    [] -> true;
+     _ -> false
+  end.  
+
+%% Checks if someone won the game in the most primitive way
 someoneWon(Board) ->
   rowWin(Board) or columnWin(Board) or diagWin(Board).
 
@@ -437,3 +529,4 @@ diagWin(Board) ->
 
 is_in(UserName,Games) ->
   length(lists:filter(fun({P1,P2,_,_}) -> (P1 == UserName) or (P2 == UserName) end,Games)) == 1.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

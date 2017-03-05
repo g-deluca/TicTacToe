@@ -7,7 +7,7 @@ autostart(Port) -> start ({127,0,0,1}, Port).
 
 start(Host, Port) ->
     {ok,Socket} = gen_tcp:connect(Host, Port, [{active,false}, {packet,0}]),
-    io:format("Bienvenido! ~n"),
+    io:format("Bienvenido! Escriba HELP para ver los comandos ~n"),
     spawn(?MODULE,listener,[Socket,self()]),
     console(Socket, []).
 
@@ -34,6 +34,8 @@ listener (Socket, Pid) ->
                         "GAME"              -> io:format("Tu sala ha sido creada exitosamente.~n");
                         "TURN"              -> MatchName = lists:nth(2,TokenList),
                                                io:format("Es tu turno en la sala "++MatchName++". ~n");
+                        "DRAW"              -> MatchName = lists:nth(2,TokenList),
+                                               io:format("La partida "++MatchName++" termino en empate. ~n");
                         "SPECT_OK"          -> io:format("Has logrado entrar como espectador a la partida. ~n");
                         "JOIN"              -> io:format("Te has unido a la partida correctamente. ~n");
                         "WELL_DELIVERED"    -> ok;
@@ -50,6 +52,8 @@ listener (Socket, Pid) ->
                                                io:format("Ya estás conectado como" ++ UserName ++".~n");
                         "ALREADY_REGISTERED"-> io:format("Ya existe una sala con ese nombre.~n");
                         "GAMES"             -> NewData = lists:subtract(Data, "GAMES "),
+                                               io:format(NewData);
+                        "HELP"              -> NewData = lists:subtract(Data, "HELP "),
                                                io:format(NewData);
                         "INCORRECT"         -> io:format("Comando incorrecto.~n");
                         "NO_VALID_GAME"     -> io:format("Sala no encontrada.~n");
@@ -69,12 +73,13 @@ listener (Socket, Pid) ->
                         "ROOM_FULL"         -> io:format("Sala llena. ~n");
                         "WIN"               -> UserName = lists:nth(2,TokenList),
                                                NameGame = lists:nth(3,TokenList),
-                                               io:format("El usuario " ++ UserName ++ " ganó la partida de " ++ NameGame ++ ".~n");
+                                               io:format("El usuario " ++ UserName ++ " ganó la partida " ++ NameGame ++ ".~n");
                         "NO_ARGS"           -> ok;
                          M                  -> io:format("Error: {~p,~p}~n",[M,Data])
                       end;
         {error, closed} -> io:format("Error recibiendo respuesta del servidor (gen_tcp:recv)")
     end,
+    receive after 500 -> ok end,
     Pid!continue,
     listener(Socket,Pid).
 
