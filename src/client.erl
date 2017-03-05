@@ -11,7 +11,7 @@ start(Host, Port) ->
     spawn(?MODULE,listener,[Socket,self()]),
     console(Socket, []).
 
-%% A console. As all of them. Here goes the commands.
+%% Here goes the commands.
 console (Socket,UserName) ->
     Command = io:get_line(UserName ++ "> "),
     gen_tcp:send(Socket,Command),
@@ -30,6 +30,7 @@ listener (Socket, Pid) ->
                                                print_table (lists:nth(2, TokenList),GameName);
                         "EXIT"              -> io:format("Te has retirado del servidor ~n"),
                                                Pid!close,
+                                               gen_tcp:close(Socket),
                                                exit(normal);
                         "GAME"              -> io:format("Tu sala ha sido creada exitosamente.~n");
                         "TURN"              -> MatchName = lists:nth(2,TokenList),
@@ -79,7 +80,6 @@ listener (Socket, Pid) ->
                       end;
         {error, closed} -> io:format("Error recibiendo respuesta del servidor (gen_tcp:recv)")
     end,
-    receive after 500 -> ok end,
     Pid!continue,
     listener(Socket,Pid).
 

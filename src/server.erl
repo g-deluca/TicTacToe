@@ -3,7 +3,7 @@
 %%%                                                                                               %%%
 %%% CORREGIR (????)                                                                               %%%
 %%% 1) Corregi OBS, ahora manda el mismo mensaje cada vez que lo pones (viaje corregir eso)       %%%
-%%% pero lo agrega una sola vez a la lisrta de spects                                             %%%
+%%% pero lo agrega una sola vez a la lista de spects                                             %%%
 %%% 2) DONE                                                                                       %%%
 %%% 3) Revisar BYE que me dio paja.                                                               %%%
 %%% 4) Agregar HELP (DONE) y SAY (DONE)                                                           %%%
@@ -101,6 +101,7 @@ psocket(CSock, UserName, Flag, Socket, Listener) ->
         already_log -> gen_tcp:send(CSock,"ALREADY_LOG "++atom_to_list(UserName));
         not_log -> gen_tcp:send(CSock,"NOT_LOG ");
         log_out -> gen_tcp:send(CSock,"EXIT "),
+                   gen_tcp:close(CSock),
                    exit(normal);
         bad_index -> gen_tcp:send(CSock, "BAD_INDEX");
         match_created -> gen_tcp:send(CSock,"GAME ");
@@ -132,17 +133,19 @@ listener(CSock) ->
     {draw, MatchName} -> gen_tcp:send(CSock,"DRAW "++atom_to_list(MatchName));
     bad_index -> gen_tcp:send(CSock, "BAD_INDEX");
     not_start -> gen_tcp:send(CSock,"NOT_START ");
+    log_out -> exit(normal);
     no_valid_turn -> gen_tcp:send(CSock,"NO_VALID_TURN ");
     you_end_game -> gen_tcp:send(CSock,"YOU_END_GAME ")
   end,
-  receive after 1000 -> ok end,
+  receive after 500 -> ok end,
   listener(CSock).
 
 % This process will be globally registered, and will redirects the message to the listener of
 % that client. It aims to simplify the internal communication.
 user(Listener, ListenerNode) ->
   receive
-    kill -> exit(normal);
+    kill -> {Listener,ListenerNode}!log_out,
+            exit(normal);
     M -> {Listener, ListenerNode}!M
   end,
   user(Listener, ListenerNode).
@@ -180,8 +183,11 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                         {list, Games} -> {Socket, Node}!{games, lists:flatten(lists:map(fun(X) -> match_print(X) end, Games))}
                                       end;
                              'HELP'-> {Socket, Node}!{help, show_help()};
-                             'BYE' -> global:send(UserName, kill),
-                                      {Socket, Node}!log_out;
+                             'BYE' -> pid_matchadm!{remove, UserName, self()},
+                                      receive 
+                                        remove_ok -> global:send(UserName, kill),
+                                                     {Socket, Node}!log_out
+                                      end;
                               _    -> {Socket, Node}!incorrect
                            end;
                       2 -> Arg1 = lists:nth(2,Input),
@@ -194,6 +200,7 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                       end;
                              'ACC' -> pid_matchadm!{join, Arg1, UserName, self()},
                                       receive
+                                        no_valid_game -> {Socket,Node}!no_valid_game;
                                         joined -> {Socket, Node}!joined;
                                         room_full -> {Socket, Node}!room_full
                                       end;
@@ -295,7 +302,7 @@ match_adm(Games) ->
                                                          case (P1 == UserName) or (P2 == UserName) of
                                                            true -> PidCommand!well_delivered,
                                                                    global:send(G,{ending,UserName}),
-                                                                   lists:map(fun(X) -> {matchadm,X}!{end_refresh,MatchName} end, nodes()),
+                                                                   lists:map(fun(X) -> {pid_matchadm,X}!{end_refresh,MatchName} end, nodes()),
                                                                    match_adm(lists:filter(fun ({X,_,_}) -> X /= MatchName end, Games));
                                                            false -> PidCommand!not_allowed
                                                          end
@@ -317,6 +324,7 @@ match_adm(Games) ->
     {refresh,NewGame} -> match_adm(Games++NewGame);
     {join_refresh,MatchName,UserName} -> match_adm(lists:map(fun(X) -> update(X,MatchName,UserName) end,Games));
     {end_refresh, MatchName} -> match_adm(lists:filter(fun ({G,_,_}) -> G /= MatchName end, Games));
+    {remove_refresh, NewGames} -> match_adm(NewGames);
     {movement,MatchName,X,Y,UserName,PidCommand} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end, Games),
                                                     case PossibleGame of
                                                       [] -> PidCommand!no_valid_game;
@@ -324,12 +332,19 @@ match_adm(Games) ->
                                                             case (P1 == UserName) or (P2 == UserName) of
                                                               true -> case is_movement_allowed(X,Y) of
                                                                         true -> PidCommand!well_delivered,
+                                                                                receive after 200 -> ok end, 
                                                                                 global:send(MatchName,{movement,X,Y,UserName});
                                                                         false -> PidCommand!bad_index
                                                                       end;
                                                               false -> PidCommand!not_allowed
                                                             end
                                                     end;
+    {remove, UserName, PidCommand} -> GamesToRemove = lists:filter(fun({_,P1,P2}) -> (P1 == UserName) or (P2 == UserName) end, Games),
+                                      NewGames = lists:filter(fun({_,P1,P2}) -> (P1 /= UserName) and (P2 /= UserName) end, Games),
+                                      lists:map(fun({G,_,_}) -> global:send(G, {ending,UserName}) end, GamesToRemove),
+                                      PidCommand!remove_ok,
+                                      lists:map(fun(X) -> {pid_matchadm,X}!{remove_refresh,NewGames} end, nodes()),
+                                      match_adm(NewGames);
     {solicite_list,PidCommand} -> PidCommand!{list,Games}
   end,
   match_adm(Games).
@@ -483,7 +498,7 @@ atom_to_integer(Num) ->
 
 %% Printing help
 show_help() ->
-        io_lib:format("~nCON <usuario>       -- conectarse al servidor con nombre <username>~n",[])++
+        io_lib:format("~nCON <usuario>         -- conectarse al servidor con nombre <username>~n",[])++
         io_lib:format("LSG                   -- ver la lista de partidas~n",[])++
         io_lib:format("BYE                   -- desconectarse del servidor~n",[])++
         io_lib:format("NEW <sala>            -- crear una sala con nombre <sala>~n",[])++
