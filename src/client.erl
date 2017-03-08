@@ -1,7 +1,7 @@
 -module(client).
 -compile(export_all).
 
-autostart(Port) -> start ({127,0,0,1}, Port).
+localstart(Port) -> start ({127,0,0,1}, Port).
 
 %% Starts the client, initializing the console.
 

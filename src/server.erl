@@ -162,7 +162,10 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
     _ -> Command = lists:nth(1, Input),
          case Flag of
            true -> case Command of
-                     'HELP'-> {Socket, Node}!{help, show_help()};
+                     'HELP'-> case Args of
+                                1 -> {Socket, Node}!{help, show_help()};
+                                _ -> {Socket, Node}!incorrect
+                              end;
                      'CON' -> case Args of
                                 2 -> NewUserName = lists:nth(2,Input),
                                      PidUser = spawn(?MODULE, user, [Listener, Node]),
@@ -205,7 +208,10 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                         room_full -> {Socket, Node}!room_full
                                       end;
                              'LEA' -> pid_matchadm!{end_spect, Arg1, UserName, self()},
-                                      {Socket, Node}!end_spect_ok;
+                                      receive
+                                        end_spect -> {Socket, Node}!end_spect_ok;
+                                        no_valid_game -> {Socket, Node}!no_valid_game
+                                      end;
                              'OBS' -> pid_matchadm!{spect, Arg1, UserName,self()},
                                       receive
                                         no_valid_game -> {Socket, Node}!no_valid_game;
