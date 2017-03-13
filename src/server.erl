@@ -12,9 +12,6 @@ server(Name, Port) ->
   % Each server has a pbalance and a match_adm process
   PidBalance = spawn(?MODULE, pbalance, [[]]),
   register(pid_balance, PidBalance),
-  Tasks = statistics(total_active_tasks),
-  pid_balance!{add_node, node(), Tasks},
-  lists:map(fun (X) -> {pid_balance, X}!{add_node, node(), Tasks} end, nodes()),
 
   PidMatch = spawn(?MODULE, match_adm, [[]]),
   register(pid_matchadm, PidMatch),
@@ -32,13 +29,11 @@ dispatcher(LSock, Cont, Node) ->
   % update messages for example
   NameListener = list_to_atom("listener"++integer_to_list(Cont)),
   PidListener = spawn(?MODULE, listener, [CSock]),
-  io:format("listener started in ~p ~n",[Node]),
   register(NameListener, PidListener),
 
   % Responds to the inputs of the user
   NameSocket = list_to_atom("socket"++integer_to_list(Cont)),
   PidSocket = spawn(?MODULE, psocket, [CSock, none, true, NameSocket, NameListener]),
-  io:format("psocket started in ~p ~n",[Node]),
   register(NameSocket, PidSocket),
 
   dispatcher(LSock, Cont+1, Node).
@@ -46,10 +41,13 @@ dispatcher(LSock, Cont, Node) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % The processes pbalance and stat handle the balance of the nodes
 pbalance(NodeList) ->
+  io:format("~p~n",[NodeList]),
   receive
-    {add_node, Node, Tasks} -> pbalance(NodeList++[{Node,Tasks}]);
-    {stat, Node, Tasks} -> NewNodeList = lists:keyreplace(Node, 1, NodeList, {Node,Tasks}),
-                           pbalance (NewNodeList);
+    {stat, Node, Tasks} -> case lists:keyfind(Node, 1, NodeList) of
+                             false -> pbalance(NodeList++[{Node, Tasks}]);
+                                 _ -> NewNodeList = lists:keyreplace(Node, 1, NodeList, {Node,Tasks}),
+                                      pbalance (NewNodeList)
+                           end;
     {connect, Pid} -> {LazyNode,_} = get_lazy_node (NodeList),
                       Pid!{spawn,LazyNode},
                       pbalance (NodeList)
@@ -163,8 +161,7 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                 2 -> NewUserName = lists:nth(2,Input),
                                      PidUser = spawn(?MODULE, user, [Listener, Node]),
                                      case global:register_name(NewUserName, PidUser) of
-                                       yes -> io:format("user started in ~p ~n",[Node]),
-                                              {Socket,Node}!{log, NewUserName};
+                                       yes -> {Socket,Node}!{log, NewUserName};
                                        no -> PidUser!kill,
                                              {Socket, Node}!log_fail
                                      end;
@@ -190,8 +187,7 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                            case Command of
                              'NEW' -> pid_matchadm!{new, Arg1, UserName, self()},
                                       receive
-                                        created -> io:format("match created in ~p ~n",[Node]),
-                                                   {Socket, Node}!match_created;
+                                        created -> {Socket, Node}!match_created;
                                         used_name -> {Socket, Node}!already_registered
                                       end;
                              'ACC' -> pid_matchadm!{join, Arg1, UserName, self()},
@@ -200,15 +196,27 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                         joined -> {Socket, Node}!joined;
                                         room_full -> {Socket, Node}!room_full
                                       end;
-                             'LEA' -> pid_matchadm!{end_spect, Arg1, UserName, self()},
+                             'LEA' -> MatchName = Arg1,
+                                      pid_matchadm!{end_spect, self()},
                                       receive
-                                        end_spect -> {Socket, Node}!end_spect_ok;
-                                        no_valid_game -> {Socket, Node}!no_valid_game
+                                        {list, Games} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end,Games),
+                                                         case PossibleGame of
+                                                           [] -> {Socket, Node}!no_valid_game;
+                                                           _  -> {G,_,_} = lists:nth(1,PossibleGame),
+                                                                 global:send(G,{end_spect,UserName}),
+                                                                 {Socket, Node}!end_spect_ok
+                                                         end
                                       end;
-                             'OBS' -> pid_matchadm!{spect, Arg1, UserName,self()},
+                             'OBS' -> MatchName = Arg1,
+                                      pid_matchadm!{spect, self()},
                                       receive
-                                        no_valid_game -> {Socket, Node}!no_valid_game;
-                                        spect_ok -> {Socket, Node}!spect_ok
+                                        {list, Games} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end,Games),
+                                                         case PossibleGame of
+                                                           [] -> {Socket, Node}!no_valid_game;
+                                                           _  -> {G,_,_} = lists:nth(1,PossibleGame),
+                                                                 global:send(G,{spect,UserName}),
+                                                                 {Socket, Node}!spect_ok
+                                                         end
                                       end;
                               _    -> {Socket, Node}!incorrect
                            end;
@@ -236,12 +244,25 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                            Arg2 = lists:nth(3, Input),
                            Arg3 = lists:nth(4, Input),
                            case Command of
-                             'PLA'-> pid_matchadm!{movement, Arg1, atom_to_integer(Arg2), atom_to_integer(Arg3), UserName, self()},
+                             'PLA'-> MatchName = Arg1,
+                                     X = Arg2,
+                                     Y = Arg3,
+                                     pid_matchadm!{movement, self()},
                                      receive
-                                       well_delivered -> {Socket, Node}!well_delivered;
-                                       no_valid_game -> {Socket, Node}!no_valid_game;
-                                       not_allowed -> {Socket, Node}!not_allowed;
-                                       bad_index -> {Socket, Node}!bad_index
+                                      {list, Games} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end, Games),
+                                                       case PossibleGame of
+                                                         [] -> {Socket, Node}!no_valid_game;
+                                                          _ -> {_,P1,P2} = lists:nth(1, PossibleGame),
+                                                               case (P1 == UserName) or (P2 == UserName) of
+                                                                 true -> case is_movement_allowed(X,Y) of
+                                                                           true -> {Socket, Node}!well_delivered,
+                                                                                   receive after 200 -> ok end,
+                                                                                   global:send(MatchName,{movement,X,Y,UserName});
+                                                                           false -> {Socket, Node}!bad_index
+                                                                         end;
+                                                                 false -> {Socket, Node}!not_allowed
+                                                               end
+                                                       end
                                      end;
                              'SAY' -> User = Arg1,
                                       Users = global:registered_names(),
@@ -306,38 +327,13 @@ match_adm(Games) ->
                                                            false -> PidCommand!not_allowed
                                                          end
                                                  end;
-    {spect, MatchName, UserName, PidCommand} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end,Games),
-                                                case PossibleGame of
-                                                  [] -> PidCommand!no_valid_game;
-                                                  _  -> {G,_,_} = lists:nth(1,PossibleGame),
-                                                        global:send(G,{spect,UserName}),
-                                                        PidCommand!spect_ok
-                                                end;
-    {end_spect, MatchName,UserName,PidCommand} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end,Games),
-                                                  case PossibleGame of
-                                                    [] -> PidCommand!no_valid_game;
-                                                    _  -> {G,_,_} = lists:nth(1,PossibleGame),
-                                                          global:send(G,{end_spect,UserName}),
-                                                          PidCommand!end_spect
-                                                  end;
+    {spect, PidCommand} -> PidCommand!{list, Games};
+    {end_spect, PidCommand} -> PidCommand!{list,Games};
     {refresh,NewGame} -> match_adm(Games++NewGame);
     {join_refresh,MatchName,UserName} -> match_adm(lists:map(fun(X) -> update(X,MatchName,UserName) end,Games));
     {end_refresh, MatchName} -> match_adm(lists:filter(fun ({G,_,_}) -> G /= MatchName end, Games));
     {remove_refresh, NewGames} -> match_adm(NewGames);
-    {movement,MatchName,X,Y,UserName,PidCommand} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end, Games),
-                                                    case PossibleGame of
-                                                      [] -> PidCommand!no_valid_game;
-                                                       _ -> {_,P1,P2} = lists:nth(1, PossibleGame),
-                                                            case (P1 == UserName) or (P2 == UserName) of
-                                                              true -> case is_movement_allowed(X,Y) of
-                                                                        true -> PidCommand!well_delivered,
-                                                                                receive after 200 -> ok end,
-                                                                                global:send(MatchName,{movement,X,Y,UserName});
-                                                                        false -> PidCommand!bad_index
-                                                                      end;
-                                                              false -> PidCommand!not_allowed
-                                                            end
-                                                    end;
+    {movement,PidCommand} -> PidCommand!{list,Games};
     {remove, UserName, PidCommand} -> GamesToRemove = lists:filter(fun({_,P1,P2}) -> (P1 == UserName) or (P2 == UserName) end, Games),
                                       NewGames = lists:filter(fun({_,P1,P2}) -> (P1 /= UserName) and (P2 /= UserName) end, Games),
                                       lists:map(fun({G,_,_}) -> global:send(G, {ending,UserName}) end, GamesToRemove),
