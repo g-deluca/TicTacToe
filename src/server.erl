@@ -1,17 +1,3 @@
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%                                                                                               %%%
-%%% CORREGIR (????)                                                                               %%%
-%%% 1) Corregi OBS, ahora manda el mismo mensaje cada vez que lo pones (viaje corregir eso)       %%%
-%%% pero lo agrega una sola vez a la lista de spects                                             %%%
-%%% 2) DONE                                                                                       %%%
-%%% 3) Revisar BYE que me dio paja.                                                               %%%
-%%% 4) Agregar HELP (DONE) y SAY (DONE)                                                           %%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-
 -module(server).
 -compile(export_all).
 
@@ -24,8 +10,11 @@ server(Name, Port) ->
   {ok, LSock} = gen_tcp:listen(Port,[{packet,0},{active,false}]),
 
   % Each server has a pbalance and a match_adm process
-  PidBalance = spawn(?MODULE, pbalance, [statistics(total_active_tasks),node()]),
+  PidBalance = spawn(?MODULE, pbalance, [[]]),
   register(pid_balance, PidBalance),
+  Tasks = statistics(total_active_tasks),
+  pid_balance!{add_node, node(), Tasks},
+  lists:map(fun (X) -> {pid_balance, X}!{add_node, node(), Tasks} end, nodes()),
 
   PidMatch = spawn(?MODULE, match_adm, [[]]),
   register(pid_matchadm, PidMatch),
@@ -54,30 +43,34 @@ dispatcher(LSock, Cont, Node) ->
 
   dispatcher(LSock, Cont+1, Node).
 
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % The processes pbalance and stat handle the balance of the nodes
-
-pbalance(TotalTasks, Node) ->
+pbalance(NodeList) ->
   receive
-    {stat, NewTotal, NewNode} -> if NewTotal =< TotalTasks -> pbalance(NewTotal, NewNode);
-                                    true                   -> pbalance(TotalTasks, Node)
-                                 end;
-    {connect, Pid} -> Pid!{spawn, Node},
-                      pbalance(TotalTasks, Node)
+    {add_node, Node, Tasks} -> pbalance(NodeList++[{Node,Tasks}]);
+    {stat, Node, Tasks} -> NewNodeList = lists:keyreplace(Node, 1, NodeList, {Node,Tasks}),
+                           pbalance (NewNodeList);
+    {connect, Pid} -> {LazyNode,_} = get_lazy_node (NodeList),
+                      Pid!{spawn,LazyNode},
+                      pbalance (NodeList)
   end.
 
 stat() ->
   TotalTasks = statistics(total_active_tasks),
 
-% We inform all nodes of the current status
-  pid_balance!{stat, TotalTasks, node()},
-  lists:map(fun(X) -> {pid_balance,X}!{stat, TotalTasks,node()} end, nodes()),
+  % We inform all nodes of the current status
+  pid_balance!{stat, node(), TotalTasks},
+  lists:map(fun(X) -> {pid_balance,X}!{stat, node(), TotalTasks} end, nodes()),
 
   receive after 2000 -> ok end,
   stat().
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+get_lazy_node(NodeList) ->
+  TasksList = lists:foldr(fun ({_,T},TList) -> [T]++TList end, [], NodeList),
+  Min = lists:min(TasksList),
+  lists:keyfind (Min, 2, NodeList).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % This processes handle the communication with the clients
@@ -187,7 +180,7 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                                       end;
                              'HELP'-> {Socket, Node}!{help, show_help()};
                              'BYE' -> pid_matchadm!{remove, UserName, self()},
-                                      receive 
+                                      receive
                                         remove_ok -> global:send(UserName, kill),
                                                      {Socket, Node}!log_out
                                       end;
@@ -338,7 +331,7 @@ match_adm(Games) ->
                                                             case (P1 == UserName) or (P2 == UserName) of
                                                               true -> case is_movement_allowed(X,Y) of
                                                                         true -> PidCommand!well_delivered,
-                                                                                receive after 200 -> ok end, 
+                                                                                receive after 200 -> ok end,
                                                                                 global:send(MatchName,{movement,X,Y,UserName});
                                                                         false -> PidCommand!bad_index
                                                                       end;
@@ -389,7 +382,7 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                                             lists:map(fun(S) -> global:send(S,{victory, Player1, MatchName}) end,Spects),
                                                             lists:map(fun(N) -> {pid_matchadm,N}!{end_refresh,MatchName} end, nodes()),
                                                             pid_matchadm!{end_refresh, MatchName};
-                                                    false -> case is_it_draw(NewBoard) of 
+                                                    false -> case is_it_draw(NewBoard) of
                                                                false -> global:send(Player2,{turn,MatchName}),
                                                                         match_initialized(Player1,Player2,false,NewBoard,Spects,MatchName);
                                                                true  -> global:send(Player1,{draw, MatchName}),
@@ -431,7 +424,7 @@ match_initialized(Player1,Player2,Turn,Board,Spects,MatchName) ->
                                                              lists:map(fun(S) -> global:send(S,{victory, Player2, MatchName}) end,Spects),
                                                              lists:map(fun(N) -> {pid_matchadm,N}!{end_refresh,MatchName} end, nodes()),
                                                              pid_matchadm!{end_refresh, MatchName};
-                                                     false -> case is_it_draw(NewBoard) of 
+                                                     false -> case is_it_draw(NewBoard) of
                                                                 false -> global:send(Player1,{turn,MatchName}),
                                                                          match_initialized(Player1,Player2,true,NewBoard,Spects,MatchName);
                                                                 true  -> global:send(Player1,{draw, MatchName}),
@@ -524,11 +517,11 @@ match_print(G) ->
  end.
 
 %% Checks if it is a draw
-is_it_draw(Board) -> 
+is_it_draw(Board) ->
   case lists:filter(fun(X) -> X==45 end, Board) of
     [] -> true;
      _ -> false
-  end.  
+  end.
 
 %% Checks if someone won the game in the most primitive way
 someoneWon(Board) ->
