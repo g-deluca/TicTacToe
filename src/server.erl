@@ -245,8 +245,8 @@ pcommand(Binary, UserName, Flag, Node, Socket, Listener) ->
                            Arg3 = lists:nth(4, Input),
                            case Command of
                              'PLA'-> MatchName = Arg1,
-                                     X = Arg2,
-                                     Y = Arg3,
+                                     X = atom_to_integer(Arg2),
+                                     Y = atom_to_integer(Arg3),
                                      pid_matchadm!{movement, self()},
                                      receive
                                       {list, Games} -> PossibleGame = lists:filter(fun({G,_,_}) -> MatchName == G end, Games),
